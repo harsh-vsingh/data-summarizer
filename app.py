@@ -1,96 +1,138 @@
 import uuid
+
 import gradio as gr
+
 from dotenv import load_dotenv
-from functools import partial
-from langgraph.graph import StateGraph
-from langgraph.checkpoint.sqlite import SqliteSaver
-from src.graph import GraphState
+
 from src.loader import load_data
-from src.nodes.classifier import classify_question
-from src.nodes.query_builder import build_query
-from src.nodes.executor import execute_query
-from src.nodes.validator import validate_and_retry
-from src.nodes.formatter import format_answer
-from src.nodes.chart_builder import build_chart
+from src.workflow import build_workflow
 
 load_dotenv()
 
 db_connection, schema_context = load_data()
 
-memory_cm = SqliteSaver.from_conn_string(":memory:")
-memory = memory_cm.__enter__()
-
-workflow = StateGraph(GraphState)
-workflow.add_node("classifier", classify_question)
-workflow.add_node("query_builder", build_query)
-workflow.add_node(
-    "executor",
-    partial(execute_query, db_connection=db_connection)
-)
-workflow.add_node("validator", validate_and_retry)
-workflow.add_node("formatter", format_answer)
-workflow.add_node("chart_builder", build_chart)
-
-workflow.set_entry_point("classifier")
-
-
-def route_from_classifier(state: GraphState):
-    classification = state.get("classification", {})
-
-    if classification.get("classification") == "answerable":
-        return "query_builder"
-
-    return "formatter"
-
-
-def route_from_validator(state: GraphState):
-    if state.get("error") == "Malformed JSON" and state.get("json_retry_count", 0) < 2:
-        return "query_builder"
-
-    if state.get("error") and "SQL Execution Failed" in state["error"]:
-        if state.get("retry_count", 0) < 2:
-            return "query_builder"
-
-    return "formatter"
-
-
-workflow.add_conditional_edges(
-    "classifier",
-    route_from_classifier
+app = build_workflow(
+    db_connection
 )
 
-workflow.add_conditional_edges(
-    "validator",
-    route_from_validator
-)
 
-workflow.add_edge("query_builder", "executor")
-workflow.add_edge("executor", "validator")
-workflow.add_edge("formatter", "chart_builder")
-workflow.add_edge("chart_builder", "__end__")
+def build_query_details(
+    sql,
+    dataframe,
+    warnings=None
+):
 
-# app = workflow.compile(checkpointer=memory)
-app = workflow.compile()
+    warnings = warnings or []
+
+    details = ""
+
+    if warnings:
+
+        details += "### Warnings\n"
+
+        for warning in warnings:
+
+            details += (
+                f"- {warning}\n"
+            )
+
+        details += "\n"
+
+    if sql:
+
+        details += (
+            "### Generated SQL\n"
+            "```sql\n"
+            f"{sql}\n"
+            "```\n\n"
+        )
+
+    if dataframe is not None:
+
+        preview_df = dataframe.head(20)
+
+        details += (
+            "### Result Preview "
+            "(first 20 rows)\n\n"
+        )
+
+        details += (
+            preview_df.to_markdown(
+                index=False
+            )
+        )
+
+    return details
 
 
-def run_graph(question, chat_history):
+def run_graph(
+    question,
+    chat_history
+):
+
+    if not question.strip():
+
+        return (
+            "",
+            chat_history,
+            None,
+            None,
+            None,
+            None,
+            ""
+        )
+
+    chat_history = (
+        chat_history or []
+    )
+
+    chat_history.append(
+        {
+            "role": "user",
+            "content": question
+        }
+    )
+
+    chat_history.append(
+        {
+            "role": "assistant",
+            "content": (
+                "Running analytical pipeline..."
+            )
+        }
+    )
+
+    yield (
+        "",
+        chat_history,
+        None,
+        None,
+        None,
+        None,
+        ""
+    )
+
     config = {
         "configurable": {
-            "thread_id": str(uuid.uuid4())
+            "thread_id": str(
+                uuid.uuid4()
+            )
         }
     }
 
     initial_state = {
         "question": question,
-        "schema_context": schema_context,
+        "schema_context": (
+            schema_context
+        ),
         "retry_count": 0,
-        "json_retry_count": 0,
-        "conversation_context": {
-            "history": chat_history or []
-        }
+        "json_retry_count": 0
     }
 
-    final_state = app.invoke(initial_state, config=config)
+    final_state = app.invoke(
+        initial_state,
+        config=config
+    )
 
     answer = final_state.get(
         "answer_text",
@@ -102,92 +144,236 @@ def run_graph(question, chat_history):
         []
     )
 
-    chart = charts[0] if charts else None
-
-    sql = final_state.get(
-        "provenance_sql",
-        ""
-    )
-
     results = final_state.get(
         "query_results",
         []
     )
 
-    data = (
-        results[0]["dataframe"]
-        if results
-        else None
+    warnings = final_state.get(
+        "warnings",
+        []
     )
 
-    chat_history = chat_history or []
+    details_markdown = ""
 
-    chat_history.append({
-        "role": "user",
-        "content": question
-    })
+    if results:
 
-    chat_history.append({
+        for idx, result in enumerate(results):
+
+            sql = result.get(
+                "sql",
+                ""
+            )
+
+            dataframe = result.get(
+                "dataframe"
+            )
+
+            details_markdown += (
+                f"\n\n## Query "
+                f"{idx + 1}\n\n"
+            )
+
+            details_markdown += (
+                build_query_details(
+                    sql,
+                    dataframe,
+                    warnings
+                )
+            )
+
+    chat_history[-1] = {
         "role": "assistant",
         "content": answer
-    })
+    }
 
-    return "", chat_history, chart, sql, data
+    yield (
+        "",
+        chat_history,
+
+        charts[0]
+        if len(charts) > 0
+        else None,
+
+        charts[1]
+        if len(charts) > 1
+        else None,
+
+        charts[2]
+        if len(charts) > 2
+        else None,
+
+        charts[3]
+        if len(charts) > 3
+        else None,
+
+        details_markdown
+    )
 
 
 with gr.Blocks(
-    title="Government Data Agent"
+    title="Government Data Agent",
+    fill_height=True
 ) as demo:
 
-    gr.Markdown("# Talk to Government Data")
+    gr.Markdown(
+        """
+# Talk to Government Data
+
+Ask analytical questions about
+Indian crop production data.
+"""
+    )
 
     with gr.Row():
 
-        with gr.Column(scale=1):
-            gr.Markdown("### Dataset Info")
-
-            gr.Markdown(
-                f"```text\n{schema_context}\n```"
-            )
-
+        # LEFT SIDE
         with gr.Column(scale=3):
 
             chatbot = gr.Chatbot(
-                height=500
+                height="75vh"
             )
-
-            question_box = gr.Textbox(
-                label="Your Question"
-            )
-
-            chart_output = gr.Plot(label="Chart")
 
             with gr.Accordion(
                 "Query Details",
                 open=False
             ):
-                sql_display = gr.Code(
-                    label="Generated SQL",
-                    language="sql"
+
+                details_output = (
+                    gr.Markdown()
                 )
 
-                df_display = gr.DataFrame(
-                    label="Query Result"
+            with gr.Row():
+
+                question_box = (
+                    gr.Textbox(
+                        placeholder=(
+                            "Ask a question..."
+                        ),
+                        container=False,
+                        scale=8
+                    )
                 )
 
-            question_box.submit(
-                run_graph,
-                [question_box, chatbot],
-                [
-                    question_box,
-                    chatbot,
-                    chart_output,
-                    sql_display,
-                    df_display
-                ]
+                submit_btn = (
+                    gr.Button(
+                        "Send",
+                        scale=1
+                    )
+                )
+
+            with gr.Row():
+
+                clear_btn = (
+                    gr.Button(
+                        "Clear Chat"
+                    )
+                )
+
+        # RIGHT SIDE
+        with gr.Column(scale=2):
+
+            gr.Markdown(
+                "## Charts"
             )
 
+            chart_1 = gr.Plot(
+                label="Chart 1"
+            )
+
+            chart_2 = gr.Plot(
+                label="Chart 2"
+            )
+
+            chart_3 = gr.Plot(
+                label="Chart 3"
+            )
+
+            chart_4 = gr.Plot(
+                label="Chart 4"
+            )
+
+    gr.Examples(
+        examples=[
+            [
+                "Show the top 10 "
+                "rice producing states."
+            ],
+            [
+                "Show year wise wheat "
+                "production trend in Punjab."
+            ],
+            [
+                "Compare rice production "
+                "across states."
+            ],
+            [
+                "Find average rice yield "
+                "by state."
+            ],
+            [
+                "List crops grown in "
+                "Maharashtra."
+            ]
+        ],
+        inputs=question_box
+    )
+
+    question_box.submit(
+        run_graph,
+        [
+            question_box,
+            chatbot
+        ],
+        [
+            question_box,
+            chatbot,
+            chart_1,
+            chart_2,
+            chart_3,
+            chart_4,
+            details_output
+        ]
+    )
+
+    submit_btn.click(
+        run_graph,
+        [
+            question_box,
+            chatbot
+        ],
+        [
+            question_box,
+            chatbot,
+            chart_1,
+            chart_2,
+            chart_3,
+            chart_4,
+            details_output
+        ]
+    )
+
+    clear_btn.click(
+        lambda: (
+            [],
+            None,
+            None,
+            None,
+            None,
+            ""
+        ),
+        outputs=[
+            chatbot,
+            chart_1,
+            chart_2,
+            chart_3,
+            chart_4,
+            details_output
+        ]
+    )
+
 if __name__ == "__main__":
+
     demo.launch(
         share=True,
         theme=gr.themes.Soft()
