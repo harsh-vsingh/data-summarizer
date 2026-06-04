@@ -295,29 +295,50 @@ Indian crop production data.
 
     gr.Examples(
         examples=[
+
+            # Ranking + aggregation
             [
-                "Show the top 10 "
-                "rice producing states."
+                "Show the top 10 rice producing states."
             ],
+
+            # Comparative analytics
             [
-                "Show year wise wheat "
-                "production trend in Punjab."
+                "Compare rice production across states."
             ],
+
+            # Time-series trend
             [
-                "Compare rice production "
-                "across states."
+                "Show year wise wheat production trend in Punjab."
             ],
+
+            # Multi-dimensional aggregation
             [
-                "Find average rice yield "
-                "by state."
+                "Show season wise crop and yield trend for Punjab."
             ],
+
+            # Hand-verifiable aggregation
             [
-                "List crops grown in "
-                "Maharashtra."
+                "Find total production of sugarcane by year."
+            ],
+
+            # Top-k district ranking
+            [
+                "Show top 20 districts by rice production."
+            ],
+
+            # Distinct categorical lookup
+            [
+                "List crops grown in Maharashtra."
+            ],
+
+            # Out-of-scope refusal
+            [
+                "Find the crop with most stars."
             ]
         ],
         inputs=question_box
     )
+
 
     question_box.submit(
         run_graph,

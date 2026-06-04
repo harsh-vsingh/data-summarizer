@@ -6,19 +6,38 @@ from app import db_connection
 
 
 QUERIES = [
-    # "Show the top 10 rice producing states.",
-    # "List wheat production by state in 2015.",
-    # "Find the total wheat production by Punjab.",
-    # "Show year wise wheat production trend in Punjab.",
-    # "Compare rice production across states.",
-    # "Show top 20 districts by rice production.",
-    # "Find average rice yield by state.",
-    # "Show cotton production trends over years.",
-    # "List crops grown in Maharashtra.",
-    # "Which state has the highest wheat yield?",
-    # "Show season wise crop and yield trend for Punjab.",
-    # "Find total production of sugarcane by year."
+
+    # Ranking + aggregation
+    "Show the top 10 rice producing states.",
+
+    # Filtering + grouping
+    "List wheat production by state in 2015.",
+
+    # Time-series trend
+    "Show year wise wheat production trend in Punjab.",
+
+    # Distinct categorical lookup
+    "List crops grown in Maharashtra.",
+
+    # Comparative aggregation
+    "Compare rice production across states.",
+
+    # Year-wise aggregation (hand-verifiable)
+    "Find total production of sugarcane by year.",
+
+    # Multi-dimensional aggregation
+    "Show season wise crop and yield trend for Punjab.",
+
+    # Top-k district ranking
+    "Show top 20 districts by rice production.",
+
+    # Out-of-scope refusal
+    "Find the crop with most stars.",
+
+    # Ambiguity handling
+    "Show production trends."
 ]
+
 
 
 for i, query in enumerate(QUERIES, 1):
@@ -43,7 +62,10 @@ for i, query in enumerate(QUERIES, 1):
     start = time.time()
 
     try:
-        final_state = app.invoke(initial_state)
+
+        final_state = app.invoke(
+            initial_state
+        )
 
         end = time.time()
 
@@ -53,18 +75,34 @@ for i, query in enumerate(QUERIES, 1):
         )
 
         print("\nFINAL ANSWER:")
-        print(final_state.get("answer_text"))
+        print(
+            final_state.get(
+                "answer_text"
+            )
+        )
 
         print("\nGENERATED SQL:")
-        print(final_state.get("provenance_sql"))
+        print(
+            final_state.get(
+                "provenance_sql"
+            )
+        )
 
         print("\nERROR:")
-        print(final_state.get("error"))
+        print(
+            final_state.get(
+                "error"
+            )
+        )
 
     except Exception as e:
+
         end = time.time()
 
-        print(f"\nPIPELINE FAILED: {str(e)}")
+        print(
+            f"\nPIPELINE FAILED: "
+            f"{str(e)}"
+        )
 
         print(
             f"FAILED AFTER: "
